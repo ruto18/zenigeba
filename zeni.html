@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <link rel="apple-touch-icon" href="zeni_icon.jpg">
+  <link rel="icon" href="zeni_icon.jpg">
+  <link rel="stylesheet" href="zeni.css">
+  <title>銭げ婆ぁ！！</title>
+</head>
+<body>
+  <div class="container">
+    <h2>お財布の魔術師になるザマス！！</h2>
+
+    <div class="controls">
+      <label>おいくらザマスか！
+        <input type="number" id="amount" placeholder="例: 3456" />
+      </label>
+      <label>欲しいお金はあるザマスか！
+        <select id="coinSelect">
+          <option value="none">枚数少ない順</option>
+          <option value="1">1円</option>
+          <option value="5">5円</option>
+          <option value="10">10円</option>
+          <option value="50">50円</option>
+          <option value="100">100円</option>
+          <option value="500">500円</option>
+          <option value="1000">1000円</option>
+          <option value="5000">5000円</option>
+          <option value="10000">10000円</option>
+        </select>
+      </label>
+    </div>
+
+    <div id="results">計算結果がここに表示されます</div>
+  </div>
+
+  <script>
+    const amountInput = document.getElementById('amount');
+const coinSelect  = document.getElementById('coinSelect');
+const resultsDiv  = document.getElementById('results');
+
+amountInput.addEventListener('input', updateResults);
+coinSelect .addEventListener('change', updateResults);
+
+/* ========== 方式A：余り組み合わせ方式（最上位は切り上げ。最上位以外は各桁で「digit>=5なら digit%5 と digit の2通り」「digit<5なら digitのみ」） ========== */
+function generateDynamicPayments(amount){
+  const ds   = String(amount).split('').map(Number);
+  const len  = ds.length;
+  const base = 10 ** (len - 1);
+  const cutUp = (ds[0] + 1) * base; // 最上位を+1して同じ桁の範囲（例：1000代→2000代）
+
+  // 最上位以外の候補作成
+  const buckets = [];
+  for(let i=1;i<len;i++){
+    const d = ds[i];
+    const place = 10 ** (len - 1 - i);
+    if(d >= 5){
+      buckets.push([ (d % 5) * place, d * place ]);
+    }else{
+      buckets.push([ d * place ]);
+    }
+  }
+
+  // 全組み合わせ生成
+  const pays = new Set();
+  (function dfs(idx, acc){
+    if(idx === buckets.length){ pays.add(cutUp + acc); return; }
+    for(const v of buckets[idx]) dfs(idx+1, acc+v);
+  })(0, 0);
+
+  pays.add(cutUp); // 基準そのものも追加
+  return [...pays].sort((a,b)=>a-b);
+}
+
+/* ========== 方式B：逐次方式（ご指定ロジック） ========== */
+/* 各位を下から：
+   1の位: v=d*1; v>=5 ? r=v-5 : r=v; n-=r; had= (v>=5)
+   10の位以降: v=d*place; if(had) v+=place; threshold=5*place;
+               v>=threshold ? (r=v-threshold, had=true) : (r=v, had=false); n-=r;
+   最後：お釣り=|n|, 支払い=入力+お釣り
+   例：1587→2142, お釣り555 
+*/
+function generateSequentialPayment(amount){
+  const s = String(amount);
+  let n = amount;
+  let had = false; // 直前の位で「余り」が出たか
+
+  for(let i = s.length-1, pos=0; i>=0; i--, pos++){
+    const d = Number(s[i]);
+    const place = 10 ** pos;
+    let v = d * place;
+    let r;
+
+    if(pos === 0){ // 1の位
+      if(v >= 5){ r = v - 5; had = true; }
+      else       { r = v;     had = false; }
+    }else{
+      if(had) v += place;              // ひとつ下の位で余りが出たら +place
+      const threshold = 5 * place;     // 10:50, 100:500, 1000:5000, ...
+      if(v >= threshold){ r = v - threshold; had = true; }
+      else               { r = v;             had = false; }
+    }
+    n -= r;
+  }
+
+  const change = Math.abs(n);
+  const pay    = amount + change;
+  return pay;
+}
+
+/* ========== お釣りの分解 ==========
+   10000円以上は 10000円札にまとめて計算（例：15万→10000円×15枚）
+   残り 〜9999円は各位ごとに「5で割る」規則：
+   1000位→5000円と1000円 / 100位→500円と100円 / 10位→50円と10円 / 1位→5円と1円
+*/
+function breakdownChange(change){
+  const bd = {};
+  let rest = change;
+
+  // 10000円札（100000位もまとめてここへ）
+  if(rest >= 10000){
+    const n10k = Math.floor(rest / 10000);
+    if(n10k > 0) bd[10000] = n10k;
+    rest %= 10000;
+  }
+
+  // 1000の位 → 5000/1000
+  let digit = Math.floor(rest / 1000);
+  if(digit > 0){
+    const q = Math.floor(digit / 5);
+    const r = digit % 5;
+    if(q>0) bd[5000] = (bd[5000]||0) + q;
+    if(r>0) bd[1000] = (bd[1000]||0) + r;
+    rest %= 1000;
+  }
+
+  // 100の位 → 500/100
+  digit = Math.floor(rest / 100);
+  if(digit > 0){
+    const q = Math.floor(digit / 5);
+    const r = digit % 5;
+    if(q>0) bd[500]  = (bd[500] ||0) + q;
+    if(r>0) bd[100]  = (bd[100] ||0) + r;
+    rest %= 100;
+  }
+
+  // 10の位 → 50/10
+  digit = Math.floor(rest / 10);
+  if(digit > 0){
+    const q = Math.floor(digit / 5);
+    const r = digit % 5;
+    if(q>0) bd[50]   = (bd[50]  ||0) + q;
+    if(r>0) bd[10]   = (bd[10]  ||0) + r;
+    rest %= 10;
+  }
+
+  // 1の位 → 5/1
+  digit = rest;
+  if(digit > 0){
+    const q = Math.floor(digit / 5);
+    const r = digit % 5;
+    if(q>0) bd[5]    = (bd[5]   ||0) + q;
+    if(r>0) bd[1]    = (bd[1]   ||0) + r;
+  }
+
+  // 合計枚数
+  const total = Object.values(bd).reduce((a,b)=>a+b,0);
+  return { bd, total };
+}
+
+/* ========== 計算 & 表示 ========== */
+function updateResults(){
+  const amount = parseInt(amountInput.value);
+  resultsDiv.innerHTML = '';
+  if(!Number.isFinite(amount) || amount <= 0) return;
+
+  // 方式A
+  const paysA = generateDynamicPayments(amount);
+
+  // 方式B（逐次）
+  const payB  = generateSequentialPayment(amount);
+
+  // 統合（重複排除）
+  const allPays = Array.from(new Set([...paysA, payB]));
+
+  const rows = allPays.map(pay=>{
+    const change = pay - amount;
+    const { bd, total } = breakdownChange(change);
+    return { pay, change, bd, total };
+  });
+
+  // 並び替え：特になし→合計枚数少ない順 / 選択あり→その額種が多い順
+  const sel = coinSelect.value;
+  if(sel === 'none'){
+    rows.sort((a,b)=>a.total - b.total);
+  }else{
+    const k = Number(sel);
+    rows.sort((a,b)=> (b.bd[k]||0) - (a.bd[k]||0) );
+  }
+
+  // 描画
+  resultsDiv.innerHTML = rows.map(r=>{
+    const lines = Object.entries(r.bd)
+      .sort((a,b)=>Number(b[0]) - Number(a[0])) // 額種の大きい順で表示
+      .map(([k,v])=>`<li>${Number(k)}円: ${v} 枚</li>`).join('');
+    return `
+      <div class="result">
+        <div><b>支払い金額:</b> ¥${r.pay}</div>
+        <div><b>お釣り:</b> ¥${r.change}</div>
+        <div><b>枚数:</b> ${r.total} 枚</div>
+        <ul class="denoms">${lines}</ul>
+      </div>`;
+  }).join('');
+}
+  </script>
+</body>
+</html>
